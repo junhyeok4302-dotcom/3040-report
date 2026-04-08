@@ -1,90 +1,220 @@
 <!DOCTYPE html>
-<html lang="ko" class="scroll-smooth">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3040 베이스캠프 | 설문분석 & 기도제목</title>
+    <title>3040 베이스캠프 | 설문분석 & 기도실</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, updateDoc, doc, increment } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-3040-app';
+
+        // 1. 인증 처리
+        signInAnonymously(auth).catch(err => console.error("인증 실패:", err));
+
+        // 2. 인증 완료 후 리스너 실행
+        onAuthStateChanged(auth, (user) => {
+            if (user) setupPrayerListener();
+        });
+
+        function setupPrayerListener() {
+            const prayerRef = collection(db, 'artifacts', appId, 'public', 'data', 'prayers');
+            onSnapshot(prayerRef, (snapshot) => {
+                const prayers = [];
+                snapshot.forEach((doc) => { prayers.push({ id: doc.id, ...doc.data() }); });
+                prayers.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                renderPrayers(prayers);
+            }, (err) => console.log("권한 대기 중..."));
+        }
+
+        window.submitPrayer = async () => {
+            const nameInput = document.getElementById('prayer-name');
+            const contentInput = document.getElementById('prayer-content');
+            if (!contentInput.value.trim()) return;
+            
+            try {
+                const prayerRef = collection(db, 'artifacts', appId, 'public', 'data', 'prayers');
+                await addDoc(prayerRef, {
+                    name: nameInput.value.trim() || "익명의 동역자",
+                    content: contentInput.value.trim(),
+                    amenCount: 0,
+                    createdAt: serverTimestamp()
+                });
+                contentInput.value = ""; nameInput.value = "";
+            } catch (e) { console.error(e); }
+        };
+
+        window.addAmen = async (id) => {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'prayers', id);
+            await updateDoc(docRef, { amenCount: increment(1) });
+        };
+
+        function renderPrayers(prayers) {
+            const container = document.getElementById('prayer-list');
+            if (!container) return;
+            if (prayers.length === 0) {
+                container.innerHTML = `<div class="col-span-full text-center py-10 text-stone-400">첫 번째 기도를 남겨주세요.</div>`;
+                return;
+            }
+            container.innerHTML = prayers.map(p => `
+                <div class="bg-white p-5 rounded-2xl border border-stone-100 shadow-sm flex flex-col justify-between transition hover:shadow-md">
+                    <div>
+                        <div class="flex justify-between items-start mb-3">
+                            <span class="text-xs font-bold text-[#8b7355] bg-stone-100 px-2 py-1 rounded">${p.name}</span>
+                        </div>
+                        <p class="text-stone-700 text-sm leading-relaxed mb-4 whitespace-pre-wrap">${p.content}</p>
+                    </div>
+                    <button onclick="addAmen('${p.id}')" class="flex items-center gap-2 text-xs text-stone-500 hover:text-red-500 transition group w-fit">
+                        <span class="text-base">🙏 아멘</span>
+                        <span>${p.amenCount || 0}</span>
+                    </button>
+                </div>
+            `).join('');
+        }
+    </script>
+
     <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        body { background-color: #fdfbf7; color: #334155; font-family: 'Pretendard', sans-serif; }
-        .chart-container { position: relative; width: 100%; max-width: 600px; margin: auto; height: 320px; }
-        .fade-in-up { opacity: 0; transform: translateY(20px); transition: all 0.8s ease-out; }
-        .fade-in-up.visible { opacity: 1; transform: translateY(0); }
-        .tab-btn.active { border-bottom: 2px solid #8b7355; color: #8b7355; font-weight: 600; }
-        
-        /* 패들렛 컨테이너 스타일 */
-        .padlet-wrapper {
-            position: relative;
-            width: 100%;
-            height: 600px; /* 게시판 높이 */
-            border-radius: 1rem;
-            overflow: hidden;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-        }
+        body { background-color: #fdfbf7; color: #334155; font-family: 'Pretendard', sans-serif; overflow-x: hidden; }
+        .page-content { display: none; }
+        .page-content.active { display: block; animation: fadeIn 0.5s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .nav-link.active { color: #8b7355; font-weight: 800; border-bottom: 2px solid #8b7355; }
+        .main-img { width: 100%; max-width: 500px; height: auto; border-radius: 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.1); margin: 0 auto; }
     </style>
 </head>
-<body class="antialiased">
+<body>
 
-    <nav class="fixed w-full z-50 bg-brand-light/90 backdrop-blur-md border-b border-stone-200 bg-white/80">
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-md border-b border-stone-200">
         <div class="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
-            <div class="flex items-center gap-2 font-bold text-stone-800">
+            <button onclick="navigateTo('home')" class="flex items-center gap-2 font-bold text-stone-800 text-lg">
                 <span>🌱</span> 3040 Basecamp
-            </div>
-            <div class="hidden md:flex space-x-6 text-sm font-medium text-stone-600">
-                <a href="#overview">개요</a>
-                <a href="#voices">분석</a>
-                <a href="#vision">비전</a>
-                <a href="#prayer" class="text-brand-primary text-[#8b7355]">기도제목</a>
+            </button>
+            <div class="flex space-x-3 md:space-x-6 text-xs md:text-sm font-medium text-stone-600">
+                <button onclick="navigateTo('voices')" class="nav-link px-1 py-1 transition hover:text-[#8b7355]">분석</button>
+                <button onclick="navigateTo('analytics')" class="nav-link px-1 py-1 transition hover:text-[#8b7355]">통계</button>
+                <button onclick="navigateTo('vision')" class="nav-link px-1 py-1 transition hover:text-[#8b7355]">비전</button>
+                <button onclick="navigateTo('prayer')" class="nav-link px-1 py-1 text-[#8b7355]">기도실</button>
             </div>
         </div>
     </nav>
 
-    <header id="overview" class="pt-32 pb-10 px-4 text-center">
-        <h1 class="text-4xl font-extrabold text-stone-800 mb-4">3040 설문 분석 & 기도의 담벼락</h1>
-        <p class="text-stone-600">우리의 목소리를 담고, 서로를 위해 기도하는 공간입니다.</p>
-    </header>
+    <div id="home" class="page-content active pt-32 min-h-screen text-center px-6">
+        <img src="9.jpg" alt="메인 이미지" class="main-img mb-10">
+        <h1 class="text-3xl md:text-5xl font-extrabold text-stone-900 mb-4">함께 그리며 걷는<br><span class="text-[#8b7355]">3040 공동체</span></h1>
+        <p class="text-stone-500 text-lg max-w-xl mx-auto mb-10">설문 분석 결과와 기도의 제목들을 한곳에 담았습니다.</p>
+        <div class="flex flex-wrap justify-center gap-4">
+            <button onclick="navigateTo('voices')" class="px-8 py-3 bg-[#8b7355] text-white rounded-full font-bold shadow-lg">이야기 보기</button>
+            <button onclick="navigateTo('prayer')" class="px-8 py-3 bg-white text-[#8b7355] border border-[#8b7355] rounded-full font-bold">기도 나누기</button>
+        </div>
+    </div>
 
-    <section id="prayer" class="py-20 bg-stone-100">
-        <div class="max-w-5xl mx-auto px-4">
-            <div class="text-center mb-10 fade-in-up">
-                <span class="text-[#8b7355] font-bold text-sm uppercase tracking-widest">Prayer Community</span>
-                <h2 class="text-3xl font-bold text-stone-800 mt-2 mb-4">기도의 담벼락</h2>
-                <p class="text-stone-600">
-                    말하기 어려운 고민, 함께 나누고 싶은 감사 제목을 남겨주세요.<br>
-                    우측 하단의 <strong class="text-[#8b7355]">+ 버튼</strong>을 눌러 익명으로 글을 남길 수 있습니다.
-                </p>
+    <div id="voices" class="page-content pt-24 min-h-screen">
+        <div class="max-w-5xl mx-auto px-6 py-12">
+            <h2 class="text-3xl font-bold text-center mb-10">우리의 목소리</h2>
+            <div class="flex justify-center mb-10 border-b border-stone-200">
+                <button onclick="switchTab('exp')" class="tab-link active px-6 py-3 font-bold text-[#8b7355]">경험하고 싶은 것</button>
+                <button onclick="switchTab('worry')" class="tab-link px-6 py-3 font-bold text-stone-400">우리의 고민</button>
+                <button onclick="switchTab('ideal')" class="tab-link px-6 py-3 font-bold text-stone-400">바라는 모임</button>
             </div>
+            <div id="tab-content" class="grid grid-cols-1 md:grid-cols-2 gap-8"></div>
+        </div>
+    </div>
 
-            <div class="fade-in-up">
-                <div class="padlet-wrapper">
-                    <iframe 
-                        src="https://padlet.com/embed/5retyra4ucl6hxl0" 
-                        frameborder="0" 
-                        allow="camera;microphone;geolocation" 
-                        style="width:100%;height:100%;background:#fff;">
-                    </iframe>
+    <div id="analytics" class="page-content pt-24 min-h-screen">
+        <div class="max-w-6xl mx-auto px-6 py-12">
+            <h2 class="text-3xl font-bold text-center mb-12">데이터 요약</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                <div class="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm"><div class="h-64"><canvas id="needsChart"></canvas></div></div>
+                <div class="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm"><div class="h-64"><canvas id="concernsChart"></canvas></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="vision" class="page-content pt-24 min-h-screen bg-stone-900 text-white">
+        <div class="max-w-4xl mx-auto px-6 py-20">
+            <h2 class="text-3xl font-bold mb-12 text-center text-[#d4b08c]">공동체 비전</h2>
+            <div class="space-y-12">
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700">
+                    <h4 class="text-xl font-bold mb-3 text-[#d4b08c]">01. 안전한 공감과 환대</h4>
+                    <p class="text-stone-400">평가 없이 서로를 수용하는 소그룹 문화를 만듭니다.</p>
                 </div>
-                <div class="mt-4 text-center text-xs text-stone-400">
-                    * 작성하신 내용은 실시간으로 공유되며, 서로를 위한 중보 기도로 사용됩니다.
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700">
+                    <h4 class="text-xl font-bold mb-3 text-[#d4b08c]">02. 일상 속 영성 훈련</h4>
+                    <p class="text-stone-400">육아와 직장 현장에서 그리스도인으로 사는 법을 나눕니다.</p>
+                </div>
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700">
+                    <h4 class="text-xl font-bold mb-3 text-[#d4b08c]">03. 현실적 제약의 동역</h4>
+                    <p class="text-stone-400">자녀 돌봄 등 실질적인 어려움을 함께 해결합니다.</p>
                 </div>
             </div>
         </div>
-    </section>
+    </div>
 
-    <footer class="bg-stone-900 py-10 text-center text-stone-500 text-sm">
-        <p>© 2026 PCK 3040 Community. 모든 기도와 나눔은 소중히 간직됩니다.</p>
-    </footer>
+    <div id="prayer" class="page-content pt-24 min-h-screen bg-stone-50">
+        <div class="max-w-5xl mx-auto px-6 py-12">
+            <div class="text-center mb-10">
+                <h2 class="text-3xl font-bold text-stone-900 mb-2">실시간 기도 담벼락</h2>
+                <p class="text-stone-500 italic">서로의 기도제목을 나누고 응원해주세요.</p>
+            </div>
+            <div class="bg-white p-6 rounded-2xl border border-stone-200 shadow-sm mb-10">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <input type="text" id="prayer-name" placeholder="이름 (익명가능)" class="p-4 rounded-xl bg-stone-50 border border-stone-200 text-sm">
+                    <input type="text" id="prayer-content" placeholder="기도제목을 적어주세요..." class="md:col-span-2 p-4 rounded-xl bg-stone-50 border border-stone-200 text-sm">
+                    <button onclick="submitPrayer()" class="bg-[#8b7355] text-white p-4 rounded-xl font-bold">보내기</button>
+                </div>
+            </div>
+            <div id="prayer-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-20"></div>
+        </div>
+    </div>
 
     <script>
-        // 애니메이션 효과
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) entry.target.classList.add('visible');
+        function navigateTo(pageId) {
+            document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.toggle('active', link.getAttribute('onclick').includes(pageId));
             });
-        }, { threshold: 0.1 });
-        document.querySelectorAll('.fade-in-up').forEach(el => observer.observe(el));
+            if (pageId === 'analytics') renderCharts();
+            window.scrollTo(0, 0);
+        }
+
+        const surveyData = {
+            exp: [{ title: "위로와 공감", items: ["나만 힘든 게 아니구나 하는 동병상련", "교회 친구 사귀기"] }, { title: "영적 회복", items: ["예수님과의 첫 사랑 회복", "기도해주는 동역자"] }],
+            worry: [{ title: "육아 및 부부", items: ["자녀 양육의 어려움", "부부간의 소통"] }, { title: "직장 및 일상", items: ["직장 생활 고충", "일상 속 신앙 유지"] }],
+            ideal: [{ title: "소그룹 지향", items: ["3~4가정의 진솔한 나눔"] }, { title: "환경 개선", items: ["육아 분리가 가능한 모임"] }]
+        };
+
+        window.switchTab = function(tabId) {
+            document.querySelectorAll('.tab-link').forEach(b => {
+                const isActive = b.getAttribute('onclick').includes(tabId);
+                b.classList.toggle('text-[#8b7355]', isActive);
+                b.classList.toggle('text-stone-400', !isActive);
+            });
+            document.getElementById('tab-content').innerHTML = surveyData[tabId].map(g => `
+                <div class="bg-white p-8 rounded-3xl border border-stone-100 shadow-sm">
+                    <h4 class="font-bold text-[#8b7355] mb-4">📌 ${g.title}</h4>
+                    <ul class="space-y-2 text-stone-600 text-sm">${g.items.map(i => `<li>• ${i}</li>`).join('')}</ul>
+                </div>`).join('');
+        };
+        switchTab('exp');
+
+        let c1, c2;
+        function renderCharts() {
+            if (c1) c1.destroy(); if (c2) c2.destroy();
+            c1 = new Chart(document.getElementById('needsChart'), { type: 'doughnut', data: { labels: ['교제', '영성', '지원'], datasets: [{ data: [45, 35, 20], backgroundColor: ['#8b7355', '#64748b', '#d6d3d1'] }] }, options: { maintainAspectRatio: false } });
+            c2 = new Chart(document.getElementById('concernsChart'), { type: 'bar', data: { labels: ['양육', '신앙', '직장', '관계', '경제'], datasets: [{ label: '빈도', data: [95, 80, 75, 60, 45], backgroundColor: '#8b7355' }] }, options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false } } } });
+        }
     </script>
 </body>
 </html>
