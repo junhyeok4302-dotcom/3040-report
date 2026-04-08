@@ -10,33 +10,44 @@
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, updateDoc, doc, increment } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase 설정 (시스템 환경 변수 활용)
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        // 1. Firebase 설정 검증 및 초기화
+        let app, auth, db;
+        try {
+            const firebaseConfig = JSON.parse(__firebase_config);
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.error("Firebase 초기화 실패:", e);
+            document.getElementById('submit-btn').innerText = "연결 오류 (설정 확인 필요)";
+        }
+
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-3040-app';
 
-        let isAuthReady = false;
-
-        async function initApp() {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("인증 실패:", error);
+        // 2. 타임아웃 설정 (5초간 응답 없으면 버튼 강제 활성화 시도)
+        setTimeout(() => {
+            const btn = document.getElementById('submit-btn');
+            if (btn && btn.disabled && btn.innerText === "연결 중...") {
+                console.log("인증 지연으로 인한 강제 버튼 활성화");
+                btn.disabled = false;
+                btn.innerText = "포스트잇 붙이기";
             }
-        }
+        }, 5000);
+
+        // 3. 인증 처리 및 리스너 등록
+        signInAnonymously(auth).catch(err => {
+            console.error("익명 인증 실패:", err);
+            // 인증에 실패하더라도 버튼은 열어두어 입력을 시도해볼 수 있게 합니다.
+            const btn = document.getElementById('submit-btn');
+            if(btn) { btn.disabled = false; btn.innerText = "포스트잇 붙이기"; }
+        });
 
         onAuthStateChanged(auth, (user) => {
             if (user) {
-                isAuthReady = true;
+                console.log("인증 성공:", user.uid);
                 const btn = document.getElementById('submit-btn');
                 if (btn) {
                     btn.disabled = false;
@@ -46,31 +57,31 @@
             }
         });
 
-        initApp();
-
         function setupPrayerListener() {
-            if (!auth.currentUser) return;
-            const prayerRef = collection(db, 'artifacts', appId, 'public', 'data', 'prayers');
-            
-            onSnapshot(prayerRef, (snapshot) => {
-                const prayers = [];
-                snapshot.forEach((doc) => { 
-                    prayers.push({ id: doc.id, ...doc.data() }); 
+            try {
+                const prayerRef = collection(db, 'artifacts', appId, 'public', 'data', 'prayers');
+                onSnapshot(prayerRef, (snapshot) => {
+                    const prayers = [];
+                    snapshot.forEach((doc) => { prayers.push({ id: doc.id, ...doc.data() }); });
+                    prayers.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                    renderPrayers(prayers);
+                }, (err) => {
+                    console.warn("데이터 읽기 권한 대기 중...");
                 });
-                prayers.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-                renderPrayers(prayers);
-            }, (err) => {
-                console.error("데이터 수신 오류:", err);
-            });
+            } catch (e) {
+                console.error("리스너 등록 실패:", e);
+            }
         }
 
         window.submitPrayer = async () => {
-            if (!isAuthReady || !auth.currentUser) return;
             const nameInput = document.getElementById('prayer-name');
             const contentInput = document.getElementById('prayer-content');
             const btn = document.getElementById('submit-btn');
 
-            if (!contentInput.value.trim()) return;
+            if (!contentInput.value.trim()) {
+                alert("내용을 입력해 주세요!");
+                return;
+            }
             
             btn.disabled = true;
             btn.innerText = "전송 중...";
@@ -88,6 +99,7 @@
                 nameInput.value = "";
             } catch (e) { 
                 console.error("전송 에러:", e);
+                alert("전송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
             } finally {
                 btn.disabled = false;
                 btn.innerText = "포스트잇 붙이기";
@@ -95,16 +107,19 @@
         };
 
         window.addAmen = async (id) => {
-            if (!auth.currentUser) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'prayers', id);
-            await updateDoc(docRef, { amenCount: increment(1) });
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'prayers', id);
+                await updateDoc(docRef, { amenCount: increment(1) });
+            } catch (e) {
+                console.error("아멘 업데이트 실패:", e);
+            }
         };
 
         function renderPrayers(prayers) {
             const container = document.getElementById('prayer-list');
             if (!container) return;
             if (prayers.length === 0) {
-                container.innerHTML = `<div class="col-span-full text-center py-20 text-stone-400">첫 번째 기도를 기다리고 있습니다.</div>`;
+                container.innerHTML = `<div class="col-span-full text-center py-20 text-stone-400 font-medium">아직 올라온 기도제목이 없습니다.<br>가장 먼저 마음을 나누어 보세요.</div>`;
                 return;
             }
             container.innerHTML = prayers.map(p => `
@@ -130,19 +145,11 @@
     <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
         body { background-color: #fdfbf7; color: #334155; font-family: 'Pretendard', sans-serif; overflow-x: hidden; }
-        
-        /* 페이지 전환 애니메이션 */
         .page-content { display: none; }
         .page-content.active { display: block; animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* 네비게이션 스타일 */
         .nav-link.active { color: #8b7355; font-weight: 800; border-bottom: 2px solid #8b7355; }
-        
-        /* 메인 이미지 스타일 */
-        .main-img { width: 100%; max-width: 500px; height: auto; border-radius: 2.5rem; box-shadow: 0 20px 50px rgba(139, 115, 85, 0.15); margin: 0 auto; }
-        
-        /* 탭 버튼 스타일 */
+        .main-img { width: 100%; max-width: 500px; height: auto; border-radius: 2.5rem; box-shadow: 0 20px 50px rgba(139,115,85,0.15); margin: 0 auto; }
         .tab-link.active { background-color: #8b7355; color: white; }
     </style>
 </head>
@@ -165,15 +172,11 @@
     <div id="home" class="page-content active pt-32 min-h-screen text-center px-6">
         <div class="max-w-4xl mx-auto">
             <img src="9.jpg" alt="메인 이미지" class="main-img mb-12">
-            <h1 class="text-3xl md:text-5xl font-extrabold text-stone-900 leading-tight mb-4 tracking-tighter">
-                함께 그리며 걷는<br><span class="text-[#8b7355]">3040 공동체</span>
-            </h1>
-            <p class="text-stone-500 text-lg max-w-xl mx-auto mb-10 leading-relaxed">
-                우리 공동체의 첫 목소리와 비전을 담았습니다.<br>메뉴를 클릭해 상세 내용을 확인해 보세요.
-            </p>
+            <h1 class="text-3xl md:text-5xl font-extrabold text-stone-900 leading-tight mb-4 tracking-tighter">함께 그리며 걷는<br><span class="text-[#8b7355]">3040 공동체</span></h1>
+            <p class="text-stone-500 text-lg max-w-xl mx-auto mb-10 leading-relaxed">우리 공동체의 첫 목소리와 비전을 담았습니다.</p>
             <div class="flex flex-wrap justify-center gap-4 pb-20">
-                <button onclick="navigateTo('voices')" class="px-10 py-4 bg-[#8b7355] text-white rounded-full font-bold shadow-xl shadow-stone-200 hover:bg-[#6f5b44] transition transform hover:-translate-y-1">분석 결과 보기</button>
-                <button onclick="navigateTo('prayer')" class="px-10 py-4 bg-white text-[#8b7355] border-2 border-[#8b7355] rounded-full font-bold hover:bg-stone-50 transition transform hover:-translate-y-1">기도 담벼락 가기</button>
+                <button onclick="navigateTo('voices')" class="px-10 py-4 bg-[#8b7355] text-white rounded-full font-bold shadow-xl">분석 결과 보기</button>
+                <button onclick="navigateTo('prayer')" class="px-10 py-4 bg-white text-[#8b7355] border-2 border-[#8b7355] rounded-full font-bold">기도 담벼락</button>
             </div>
         </div>
     </div>
@@ -186,8 +189,7 @@
                 <button onclick="switchTab('worry')" class="tab-link flex-1 py-3 rounded-xl text-sm font-bold transition">고민</button>
                 <button onclick="switchTab('ideal')" class="tab-link flex-1 py-3 rounded-xl text-sm font-bold transition">기대</button>
             </div>
-            <div id="tab-content" class="grid grid-cols-1 md:grid-cols-2 gap-8 text-left">
-                </div>
+            <div id="tab-content" class="grid grid-cols-1 md:grid-cols-2 gap-8 text-left"></div>
         </div>
     </div>
 
@@ -196,11 +198,9 @@
             <h2 class="text-3xl font-extrabold text-center mb-12">데이터로 본 우리의 마음</h2>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 <div class="bg-white p-10 rounded-[2.5rem] border border-stone-100 shadow-sm">
-                    <h3 class="text-center font-bold mb-8 text-stone-700">모임에서 기대하는 가치</h3>
                     <div class="h-72"><canvas id="needsChart"></canvas></div>
                 </div>
                 <div class="bg-white p-10 rounded-[2.5rem] border border-stone-100 shadow-sm">
-                    <h3 class="text-center font-bold mb-8 text-stone-700">주요 고민 영역별 비중</h3>
                     <div class="h-72"><canvas id="concernsChart"></canvas></div>
                 </div>
             </div>
@@ -208,21 +208,12 @@
     </div>
 
     <div id="vision" class="page-content pt-24 min-h-screen bg-stone-900 text-white">
-        <div class="max-w-4xl mx-auto px-6 py-20">
-            <h2 class="text-4xl font-extrabold text-center mb-20 text-[#d4b08c]">3040 베이스캠프 비전</h2>
-            <div class="space-y-10">
-                <div class="p-10 bg-stone-800 rounded-3xl border border-stone-700 hover:border-[#8b7355] transition">
-                    <h4 class="text-2xl font-bold mb-4 text-[#d4b08c]">1. 안전한 공감과 환대</h4>
-                    <p class="text-stone-400 text-lg leading-relaxed italic">"나만 힘든 것이 아니구나"를 느낄 수 있도록 평가 없는 소그룹 나눔 문화를 정착시킵니다.</p>
-                </div>
-                <div class="p-10 bg-stone-800 rounded-3xl border border-stone-700 hover:border-[#8b7355] transition">
-                    <h4 class="text-2xl font-bold mb-4 text-[#d4b08c]">2. 일상 영성의 회복</h4>
-                    <p class="text-stone-400 text-lg leading-relaxed italic">직장과 육아라는 삶의 치열한 현장에서 하나님을 발견하는 신앙의 일상화를 돕습니다.</p>
-                </div>
-                <div class="p-10 bg-stone-800 rounded-3xl border border-stone-700 hover:border-[#8b7355] transition">
-                    <h4 class="text-2xl font-bold mb-4 text-[#d4b08c]">3. 현실적 한계의 극복</h4>
-                    <p class="text-stone-400 text-lg leading-relaxed italic">육아 및 환경적 제약으로 참석하지 못하는 가정을 위해 실질적인 환경 개선을 논의합니다.</p>
-                </div>
+        <div class="max-w-4xl mx-auto px-6 py-20 text-center">
+            <h2 class="text-4xl font-extrabold mb-16 text-[#d4b08c]">3040 베이스캠프 비전</h2>
+            <div class="space-y-8 text-left">
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700"><h4 class="text-xl font-bold mb-3 text-[#d4b08c]">1. 안전한 공감과 환대</h4><p class="text-stone-400">평가 없는 소그룹 나눔 문화를 만듭니다.</p></div>
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700"><h4 class="text-xl font-bold mb-3 text-[#d4b08c]">2. 일상 영성의 회복</h4><p class="text-stone-400">직장과 육아 현장에서 신앙을 실천합니다.</p></div>
+                <div class="p-8 bg-stone-800 rounded-3xl border border-stone-700"><h4 class="text-xl font-bold mb-3 text-[#d4b08c]">3. 현실적 제약의 동역</h4><p class="text-stone-400">육아 등 현실적 한계를 함께 해결합니다.</p></div>
             </div>
         </div>
     </div>
@@ -233,52 +224,32 @@
                 <h2 class="text-4xl font-black text-stone-900 mb-4 tracking-tighter">실시간 기도의 담벼락</h2>
                 <p class="text-stone-600 font-medium italic">성도님들의 마음을 담은 포스트잇을 붙여주세요.</p>
             </div>
-            
             <div class="bg-white p-8 rounded-3xl border-4 border-stone-300 shadow-xl mb-16 max-w-2xl mx-auto">
                 <div class="flex flex-col gap-4">
                     <input type="text" id="prayer-name" placeholder="이름 (비워두면 익명)" class="p-4 rounded-xl bg-stone-50 border border-stone-200 text-sm outline-none focus:ring-2 focus:ring-[#8b7355]">
-                    <textarea id="prayer-content" placeholder="함께 나누고 싶은 기도제목을 적어주세요..." rows="3" class="p-4 rounded-xl bg-stone-50 border border-stone-200 text-sm outline-none focus:ring-2 focus:ring-[#8b7355]"></textarea>
+                    <textarea id="prayer-content" placeholder="기도제목을 적어주세요..." rows="3" class="p-4 rounded-xl bg-stone-50 border border-stone-200 text-sm outline-none focus:ring-2 focus:ring-[#8b7355]"></textarea>
                     <button id="submit-btn" disabled onclick="submitPrayer()" class="bg-[#8b7355] disabled:bg-stone-400 text-white py-4 rounded-xl font-black transition text-lg shadow-lg">연결 중...</button>
                 </div>
             </div>
-            
-            <div id="prayer-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-20">
-                </div>
+            <div id="prayer-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-20"></div>
         </div>
     </div>
 
-    <footer class="bg-white py-12 text-center text-stone-400 text-xs border-t border-stone-100">
-        <p>© 2026 PCK 3040 Community Basecamp</p>
-    </footer>
-
     <script>
-        // 화면 전환 로직
         function navigateTo(pageId) {
             document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active'));
             document.getElementById(pageId).classList.add('active');
-            
             document.querySelectorAll('.nav-link').forEach(link => {
                 link.classList.toggle('active', link.getAttribute('onclick').includes(pageId));
             });
-            
             if (pageId === 'analytics') renderCharts();
             window.scrollTo(0, 0);
         }
 
-        // 설문 분석 데이터
         const surveyData = {
-            exp: [
-                { title: "위로와 공감", items: ["나만 힘든 게 아니구나 하는 위로", "동병상련의 치유 경험", "가까운 교회 친구 사귀기"] },
-                { title: "영적 갈급함", items: ["예수님과의 첫 사랑 회복", "깊이 있는 말씀 나눔", "기도해주는 동역자 매칭"] }
-            ],
-            worry: [
-                { title: "양육 및 가정", items: ["자녀 양육의 어려움", "부부간의 신앙적 소통", "믿음의 가정 세우기"] },
-                { title: "직장 및 일상", items: ["직장 생활 고충", "경제적 관리와 노후", "일상 속 신앙 유지"] }
-            ],
-            ideal: [
-                { title: "소그룹 중심", items: ["3~4가정의 깊은 나눔", "서로를 알아갈 충분한 시간"] },
-                { title: "현실적 환경", items: ["육아 분리가 가능한 모임", "일관성 있는 커리큘럼"] }
-            ]
+            exp: [{ title: "위로와 공감", items: ["나만 힘든 게 아니구나 하는 위로", "교회 친구 사귀기"] }, { title: "영적 갈급함", items: ["예수님과의 첫 사랑 회복", "기도해주는 동역자 매칭"] }],
+            worry: [{ title: "가정/육아", items: ["자녀 양육의 어려움", "부부간 신앙 소통"] }, { title: "현실/직장", items: ["직장 생활 고충", "미래에 대한 준비"] }],
+            ideal: [{ title: "소그룹", items: ["깊은 나눔이 가능한 3-4가정 모임"] }, { title: "환경", items: ["육아 분리가 가능한 현실적 모임"] }]
         };
 
         window.switchTab = function(tabId) {
@@ -286,29 +257,16 @@
             document.getElementById('tab-content').innerHTML = surveyData[tabId].map(g => `
                 <div class="bg-white p-8 rounded-3xl border border-stone-200 shadow-sm">
                     <h4 class="text-xl font-bold text-[#8b7355] mb-6 flex items-center gap-2">📌 ${g.title}</h4>
-                    <ul class="space-y-4 text-stone-600 text-sm">
-                        ${g.items.map(i => `<li class="flex items-start gap-2"><span>•</span>${i}</li>`).join('')}
-                    </ul>
+                    <ul class="space-y-4 text-stone-600 text-sm">${g.items.map(i => `<li class="flex items-start gap-2"><span>•</span>${i}</li>`).join('')}</ul>
                 </div>`).join('');
         };
         switchTab('exp');
 
-        // 데이터 통계 차트 로직
         let c1, c2;
         function renderCharts() {
             if (c1) c1.destroy(); if (c2) c2.destroy();
-            const ctx1 = document.getElementById('needsChart').getContext('2d');
-            c1 = new Chart(ctx1, {
-                type: 'doughnut',
-                data: { labels: ['교제/위로', '말씀/영성', '현실지원'], datasets: [{ data: [45, 35, 20], backgroundColor: ['#8b7355', '#64748b', '#d6d3d1'], borderWidth: 0 }] },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
-            });
-            const ctx2 = document.getElementById('concernsChart').getContext('2d');
-            c2 = new Chart(ctx2, {
-                type: 'bar',
-                data: { labels: ['양육', '신앙유지', '직장', '부부관계', '경제'], datasets: [{ label: '빈도', data: [95, 80, 70, 60, 45], backgroundColor: '#8b7355', borderRadius: 10 }] },
-                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { grid: { display: false } } }, plugins: { legend: { display: false } } }
-            });
+            c1 = new Chart(document.getElementById('needsChart'), { type: 'doughnut', data: { labels: ['교제', '영성', '지원'], datasets: [{ data: [45, 35, 20], backgroundColor: ['#8b7355', '#64748b', '#d6d3d1'], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } } });
+            c2 = new Chart(document.getElementById('concernsChart'), { type: 'bar', data: { labels: ['양육', '신앙', '직장', '부부', '경제'], datasets: [{ label: '빈도', data: [95, 80, 75, 60, 45], backgroundColor: '#8b7355', borderRadius: 10 }] }, options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } } });
         }
     </script>
 </body>
